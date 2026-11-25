@@ -80,6 +80,19 @@ Do not edit configuration as a side effect of delegation.
 
 ## Bundled assets worth raiding (offline, authoritative)
 
+### Optional CommandPLUG model selector
+
+If CommandPLUG is installed, use its `tool-harness/model_selection.py` helper for
+an explicitly requested task model or a trusted project pin (`.commandplug.json`
+at the project root, containing only `{"model":"provider/model"}`). Call
+`resolve --project <project-root> [--model <exact-id>]`. Treat the result as data:
+validate the choice with the user’s authorization and pass `argv` as separate
+tokens on a fresh run, never as shell text. Do not launch on resolver error or
+assume catalog membership proves access. Capture stdout NDJSON and the real exit
+code, then call `verify --events <file> --exit-code <code>` with `--expected-model`
+when pinned. Report observed models even on mismatch; do not switch silently.
+Without the helper, use the standard CLI workflow below.
+
 The install ships its own docs and playbooks — read them instead of guessing, and
 mine them for ideas:
 

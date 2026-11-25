@@ -1,0 +1,22 @@
+name: Cross-platform checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  portability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python tool-harness/tests/test_commandcode_status.py -v
+      - run: python tool-harness/tests/test_model_selection.py -v
+      - run: node --check tool-harness/desktop/plugin.js

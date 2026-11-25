@@ -26,6 +26,7 @@ from typing import Any
 
 logger = logging.getLogger("tool_harness")
 
+
 _MAX_PENDING = 512
 _FLUSH_EVERY = 25
 
@@ -161,6 +162,24 @@ def _maybe_flush() -> None:
         _flush()
 
 
+def _commandcode_state() -> str:
+    try:
+        from .commandcode_status import availability
+
+        return availability()
+    except Exception:
+        return "unknown"
+
+
+def _commandcode_line() -> str:
+    state = _commandcode_state()
+    if state == "found":
+        return "Command Code CLI: found on backend PATH"
+    if state == "missing":
+        return "Command Code CLI: not found on backend PATH (optional for repair)"
+    return "Command Code CLI: status unknown"
+
+
 def _summary() -> str:
     flushed = _flush()
     read: dict[str, dict[str, int]] = {}
@@ -179,7 +198,10 @@ def _summary() -> str:
     except Exception:
         read = {}
     if not read:
-        return "tool-harness: no tool calls counted yet (it counts every call, repaired or not)."
+        return (
+            "tool-harness: no tool calls counted yet (it counts every call, repaired or not).\n"
+            + _commandcode_line()
+        )
     lines = ["tool-harness — repairs / calls per tool:"]
     for tool in sorted(read):
         stats = read[tool]
@@ -192,6 +214,7 @@ def _summary() -> str:
         lines.append(f"  {tool}: {repaired}/{calls} ({rate})" + (f" — {rules}" if rules else ""))
     if flushed:
         lines.append(f"(flushed {flushed} more repairs this call)")
+    lines.append(_commandcode_line())
     return "\n".join(lines)
 
 
@@ -202,12 +225,15 @@ def _command(raw_args: str = "", **kwargs: Any) -> str:
     """``/tool-harness`` entry point.
 
     ``status`` is a pure liveness probe: no counters are flushed, no log is read, so a
-    status chip polling every 20s never perturbs the metrics it reports.
+    status chip polling every 20s never perturbs the metrics it reports. ``dependencies``
+    is likewise side-effect free and reports the optional CLI as JSON.
     """
     try:
         argument = str(raw_args or "").strip().lower()
         if argument == "status":
             return _SENTINEL
+        if argument == "dependencies":
+            return json.dumps({"commandcode": _commandcode_state()}, separators=(",", ":"))
         return f"{_SENTINEL} — tool-harness is repairing tool-call arguments.\n{_summary()}"
     except Exception:
         logger.debug("tool-harness command failed", exc_info=True)

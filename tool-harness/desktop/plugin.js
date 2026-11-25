@@ -12,6 +12,22 @@ function isActive(reply) {
   return Boolean(reply) && reply.type === "plugin" && reply.output === SENTINEL;
 }
 
+async function readCli(profile) {
+  try {
+    const reply = await host.request(
+      "command.dispatch",
+      { name: COMMAND, arg: "dependencies", profile },
+      TIMEOUT_MS
+    );
+    if (!reply || reply.type !== "plugin" || typeof reply.output !== "string") return "unknown";
+    const payload = JSON.parse(reply.output);
+    const state = payload && payload.commandcode;
+    return state === "found" || state === "missing" ? state : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 const CHIP = {
   display: "inline-flex",
   alignItems: "center",
@@ -42,11 +58,13 @@ function StatusChip() {
 
 function StatusProbe({ open, profile }) {
   const [phase, setPhase] = useState(open ? "pending" : "offline");
+  const [cli, setCli] = useState("unknown");
 
   useEffect(() => {
     let cancelled = false;
 
     if (!open) {
+      setCli("unknown");
       setPhase("offline");
       return () => {
         cancelled = true;
@@ -63,7 +81,14 @@ function StatusProbe({ open, profile }) {
           TIMEOUT_MS
         );
         if (cancelled) return;
-        setPhase(isActive(reply) ? "active" : "inactive");
+        if (!isActive(reply)) {
+          setPhase("inactive");
+          return;
+        }
+        setPhase("active");
+        const state = await readCli(profile);
+        if (cancelled) return;
+        setCli(state);
       } catch {
         if (cancelled) return;
         setPhase("inactive");
@@ -80,9 +105,15 @@ function StatusProbe({ open, profile }) {
   }, [open, profile]);
 
   const tone = PHASES[phase] || PHASES.offline;
+  const cliLabel = cli === "found" || cli === "missing" ? cli : "unknown";
+  const chipText =
+    phase === "active"
+      ? "CommandPLUG · CLI " + cliLabel
+      : SENTINEL.replace("active", tone.label);
   const accessibleLabel =
     "CommandPLUG status: " +
     tone.label +
+    (phase === "active" ? ", CLI " + cliLabel : "") +
     (!open ? " (gateway closed)" : profile ? " (profile " + profile + ")" : "");
 
   return jsx("span", {
@@ -111,7 +142,7 @@ function StatusProbe({ open, profile }) {
           display: "inline-block",
         },
       }),
-      jsx("span", { key: "text", children: SENTINEL.replace("active", tone.label) }),
+      jsx("span", { key: "text", children: chipText }),
     ],
   });
 }
