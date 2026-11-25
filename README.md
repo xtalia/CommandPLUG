@@ -1,6 +1,6 @@
 # CommandPLUG
 
-![CommandPLUG mixtape cover: a teal plug raps into a gold mic while a winged robot works the beat pad](assets/commandplug.png)
+![CommandPLUG cover: a hacker in pink sunglasses types on a teal toy laptop against a wall of green code](assets/commandplug.webp)
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired by [Command Code’s harness engineering](https://commandcode.ai/docs/harness-engineering). Fewer busted tool calls, fewer reruns.
 
