@@ -1,6 +1,6 @@
 # CommandPLUG
 
-![CommandPLUG cover: a hacker in pink sunglasses types on a teal toy laptop against a wall of green code](assets/commandplug.webp)
+![CommandPLUG cover: marble Hermes in pink sunglasses presses a yellow toy-laptop key amid Greek columns and blue-to-coral digital rain](assets/commandplug.webp)
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired by [Command Code’s harness engineering](https://commandcode.ai/docs/harness-engineering). Fewer busted tool calls, fewer reruns.
 
