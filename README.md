@@ -20,4 +20,8 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired b
 1. Copy the [`tool-harness`](tool-harness) folder into the active Hermes profile’s `plugins/` directory, then run `hermes plugins enable tool-harness`.
 2. **Optional, Desktop:** copy [`tool-harness/desktop/plugin.js`](tool-harness/desktop/plugin.js) to `<Hermes home>/desktop-plugins/tool-harness/plugin.js`. The badge reports the connected profile’s status; it doesn’t enable the backend.
 
+## Optional: delegate coding to Command Code
+
+The [`commandcode-delegation` skill](skills/commandcode-delegation/SKILL.md) lets Hermes scope the task and verify the result while Command Code writes the code. To use it, copy the entire [`commandcode-delegation`](skills/commandcode-delegation) folder into the active Hermes profile’s `skills/` directory and start a new session. Install and authenticate the Command Code CLI separately. The skill and plugin can be used independently.
+
 Early preview. Tested on Hermes `0.23.4+349.gc004ce2`; requires a build with `tool_request` middleware. Enable it separately on any other profile or remote Hermes instance. Independent project, not affiliated with Command Code or Nous Research. [MIT](LICENSE).
