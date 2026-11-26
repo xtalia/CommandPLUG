@@ -9,7 +9,25 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired b
 - Validates calls against the registered tool schema, repairs allowlisted invalid fields, and validates again before applying a repair. It handles numeric controls in `read_file`, `search_files`, `terminal`, and `web_extract`, as well as JSON-stringified arrays in `web_extract.urls`. It can tell the model what changed. It does not rewrite commands, paths, or file contents; ambiguous or still-invalid calls pass through unchanged.
 - Runs in the Hermes backend, not just Desktop. Use `/commandplug` for status and local repair counts. Desktop has an optional status-bar badge.
 
-Validation governs only the plugin's own candidate repairs; it is not an enforcement layer. Hermes may independently coerce the original arguments on another dispatch path, including cases CommandPLUG declined. Repair explanations are best effort: missing call identifiers, blocked calls or result shapes that cannot safely carry metadata can prevent delivery. Counts are observations for covered tools, not prevented errors or confirmed executions.
+## How tool-call repair works
+
+When a model wants to use a tool, it sends Hermes the tool name and arguments. For the fields listed below, CommandPLUG checks the arguments it receives against the tool's effective schema before the handler runs. Some Hermes dispatch paths may already have coerced the model's original arguments before the plugin sees them.
+
+1. **Validate.** An already-valid call is left unchanged. If the schema is missing or cannot be checked, the plugin skips the repair.
+2. **Repair.** For an allowlisted field with a type error, try a deterministic conversion on a copy. For example, `read_file({"path":"notes.md","limit":"30"})` becomes `read_file({"path":"notes.md","limit":30})`; `web_extract({"urls":"[\"https://example.com\"]"})` can become `web_extract({"urls":["https://example.com"]})`.
+3. **Validate again.** Apply the candidate only if the *whole* call passes the same schema, including required fields and limits. Otherwise, leave the original arguments untouched.
+4. **Explain when possible.** The tool result can include a `_tool_harness` note describing the change, so the model can use the right shape next time. The note is best effort: missing identifiers, blocked calls or result shapes that cannot safely carry metadata can prevent it. `/commandplug` shows local counts for the covered tools and whether validation is available; these are not counts of prevented errors or confirmed executions.
+
+| Tool | Fields eligible for repair |
+| --- | --- |
+| `read_file` | `offset`, `limit`: numeric strings to integers |
+| `search_files` | `offset`, `limit`, `context`: numeric strings to integers |
+| `terminal` | `timeout`: numeric strings to integers; the command is never rewritten |
+| `web_extract` | `char_limit`: numeric strings to integers; `urls`: a JSON-stringified array to an array |
+
+The plugin does **not** guess paths, turn a bare string into a URL list, or remove `null` / `{}` to substitute defaults. Other tools and nested fields are outside its repair scope. The repair catalogue also contains experimental rules that are **not enabled** in the runtime.
+
+This is a best-effort repair layer, not a safety gate: a skipped call continues through Hermes, whose own coercion and validation may behave differently. In particular, rejecting a plugin repair does not guarantee the tool won't run. Command Code's [original design](https://commandcode.ai/docs/harness-engineering/tool-call-repairs) also returns a model-readable retry error for calls it cannot repair; CommandPLUG does not currently provide that final-dispatch guarantee. No claim of a measured reduction in failures is made without a comparative benchmark.
 
 ## What’s next — and why
 
