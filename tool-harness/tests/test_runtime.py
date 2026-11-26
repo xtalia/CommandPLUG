@@ -167,6 +167,93 @@ class RuntimeTests(unittest.TestCase):
             self.assertIsNone(plugin._on_tool_request(tool_name='read_file',
                               args={'path': 'a', 'limit': '3'}, session_id='s', tool_call_id='x'))
 
+    def test_four_outcomes_and_input_snapshots(self):
+        outcomes = [
+            ({'path': 'a', 'limit': 3}, plugin.OutcomeKind.VALID),
+            ({'path': 'a', 'limit': '3'}, plugin.OutcomeKind.REPAIRED),
+            ({'path': 'a', 'limit': 'too many'}, plugin.OutcomeKind.UNREPAIRABLE),
+        ]
+        for args, kind in outcomes:
+            with self.subTest(kind=kind):
+                original = copy.deepcopy(args)
+                outcome = plugin._evaluate('read_file', args)
+                self.assertEqual(outcome.kind, kind)
+                self.assertEqual(args, original)
+                self.assertEqual(outcome.original, original)
+                if kind is plugin.OutcomeKind.REPAIRED:
+                    self.assertEqual(outcome.candidate, {'path': 'a', 'limit': 3})
+                    self.assertTrue(outcome.changes)
+                if kind is plugin.OutcomeKind.UNREPAIRABLE:
+                    self.assertIsNone(outcome.candidate)
+                    self.assertTrue(outcome.issues)
+                    self.assertEqual(outcome.issues[0].path, ('limit',))
+                    self.assertEqual(outcome.issues[0].code, 'type')
+                    self.assertNotIn('too many', repr(outcome.issues))
+        with patch.object(plugin, '_validation_library', return_value=None):
+            result = plugin._evaluate('read_file', {'path': 'a', 'limit': '3'})
+            self.assertEqual(result.kind, plugin.OutcomeKind.UNAVAILABLE)
+            self.assertEqual(result.reason, 'validator_unavailable')
+
+    def test_outcome_rejects_inconsistent_states_and_hides_payload_in_repr(self):
+        with self.assertRaises(ValueError):
+            plugin.Outcome(plugin.OutcomeKind.REPAIRED, {'secret': 'a'})
+        with self.assertRaises(ValueError):
+            plugin.Outcome(plugin.OutcomeKind.UNAVAILABLE, {})
+        with self.assertRaises(ValueError):
+            plugin.Outcome(plugin.OutcomeKind.UNREPAIRABLE, {})
+        with self.assertRaises(ValueError):
+            plugin.Outcome('valid', {})
+        result = plugin._evaluate('read_file', {'path': 'private-name', 'limit': '3'})
+        self.assertNotIn('private-name', repr(result))
+
+    def test_missing_required_field_has_actionable_diagnostic(self):
+        result = plugin._evaluate('read_file', {'limit': '3'})
+        self.assertEqual(result.kind, plugin.OutcomeKind.UNREPAIRABLE)
+        self.assertTrue(any(issue.path == ('path',) and issue.code == 'required' for issue in result.issues))
+
+    def test_four_outcomes_counted_without_argument_values(self):
+        for index, args in enumerate(({'path':'private-name', 'limit':3}, {'path':'private-name', 'limit':'3'},
+                                      {'path':'private-name', 'limit':'bad'})):
+            plugin._on_tool_request(tool_name='read_file', args=args, session_id='s', tool_call_id=str(index))
+        with patch.object(plugin, '_validation_library', return_value=None):
+            plugin._on_tool_request(tool_name='read_file', args={'path':'private-name'}, session_id='s', tool_call_id='x')
+        self.assertEqual([plugin._counters['read_file'].get('outcome:' + x) for x in ('valid','repaired','unrepairable','unavailable')], [1,1,1,1])
+        with patch.object(plugin, '_log_path', return_value=self.path):
+            summary = plugin._summary()
+            self.assertIn('unrepairable=1', summary)
+            self.assertIn('unavailable=1', summary)
+            self.assertNotIn('private-name', self.path.read_text(encoding='utf-8'))
+
+    def test_execution_guard_blocks_invalid_without_calling_handler(self):
+        called = []
+        result = plugin._on_tool_execution(tool_name='read_file',
+                    args={'path': 'private-name', 'limit': 3000},
+                    next_call=lambda args: called.append(args))
+        self.assertEqual(called, [])
+        self.assertIn('limit', result)
+        self.assertIn('2000', result)
+        self.assertNotIn('private-name', result)
+
+    def test_execution_guard_passes_valid_and_fails_open_when_unavailable(self):
+        called = []
+        def handler(args):
+            called.append(args)
+            return 'handler result'
+        self.assertEqual(plugin._on_tool_execution(tool_name='read_file', args={'path': 'a', 'limit': 3}, next_call=handler), 'handler result')
+        with patch.object(plugin, '_validation_library', return_value=None):
+            self.assertEqual(plugin._on_tool_execution(tool_name='read_file', args={'path': 'a', 'limit': 3000}, next_call=handler), 'handler result')
+        self.assertEqual(len(called), 2)
+        self.assertEqual(plugin._counters['read_file']['guard:unavailable'], 1)
+
+    def test_execution_guard_does_not_retry_a_failing_handler(self):
+        called = []
+        def handler(args):
+            called.append(args)
+            raise RuntimeError('handler failed')
+        with self.assertRaisesRegex(RuntimeError, 'handler failed'):
+            plugin._on_tool_execution(tool_name='read_file', args={'path': 'a'}, next_call=handler)
+        self.assertEqual(len(called), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
