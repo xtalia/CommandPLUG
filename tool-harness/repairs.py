@@ -152,6 +152,8 @@ def repair_wrap_scalar(args: dict, key: str, value: Any, prop: dict, notes: list
         return False
     if isinstance(value, str) and ("," in value or ";" in value):
         return False
+    if isinstance(value, str) and value.lstrip().startswith("["):
+        return False  # Malformed JSON-looking arrays are not a single scalar.
     args[key] = [value]
     notes.append(f"wrapped scalar `{key}` in a one-element array")
     return True

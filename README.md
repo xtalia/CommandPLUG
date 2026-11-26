@@ -6,8 +6,10 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired b
 
 ## What it does
 
-- Repairs numeric argument formatting in `read_file`, `search_files`, and `terminal`, like `"30"` instead of `30` or an unwanted `null` in a pagination field. It can tell the model what changed. It does not rewrite commands, paths, or file contents.
+- Validates calls against the registered tool schema, repairs allowlisted invalid fields, and validates again before applying a repair. It handles numeric controls in `read_file`, `search_files`, `terminal`, and `web_extract`, as well as JSON-stringified arrays in `web_extract.urls`. It can tell the model what changed. It does not rewrite commands, paths, or file contents; ambiguous or still-invalid calls pass through unchanged.
 - Runs in the Hermes backend, not just Desktop. Use `/commandplug` for status and local repair counts. Desktop has an optional status-bar badge.
+
+Validation governs only the plugin's own candidate repairs; it is not an enforcement layer. Hermes may independently coerce the original arguments on another dispatch path, including cases CommandPLUG declined. Repair explanations are best effort: missing call identifiers, blocked calls or result shapes that cannot safely carry metadata can prevent delivery. Counts are observations for covered tools, not prevented errors or confirmed executions.
 
 ## What’s next — and why
 
@@ -17,7 +19,7 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired b
 
 ## Install
 
-**Tool-call repair:** requires only Hermes Agent with `tool_request` middleware. No Command Code, npm, or separate Python packages are needed for repair.
+**Tool-call repair:** requires Hermes Agent with `tool_request` middleware and `jsonschema>=4.18,<5` installed in Hermes's Python environment. No Command Code or npm is needed for repair. If schema validation is unavailable, the plugin fails open and leaves arguments unchanged.
 
 1. Copy the [`tool-harness`](tool-harness) folder into the active Hermes profile’s `plugins/` directory, then run `hermes plugins enable tool-harness`.
 2. **Optional, Desktop:** copy [`tool-harness/desktop/plugin.js`](tool-harness/desktop/plugin.js) to `<Hermes home>/desktop-plugins/tool-harness/plugin.js`. The badge reports the connected profile’s status; it doesn’t enable the backend.

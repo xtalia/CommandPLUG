@@ -16,6 +16,7 @@ import tempfile
 os.environ["HERMES_HOME"] = os.environ.get("HERMES_HOME") or tempfile.mkdtemp(prefix="th-probe-")
 
 import tools.file_tools  # noqa: F401  (registers read_file)
+import tools.web_tools  # noqa: F401  (registers web_extract)
 from hermes_cli.middleware import apply_tool_request_middleware
 from hermes_cli.plugins import has_hook, has_middleware
 
@@ -24,7 +25,7 @@ assert has_hook("transform_tool_result"), "plugin hook not discovered"
 
 ids = {"session_id": "probe-session", "tool_call_id": "call-1"}
 
-broken = {"path": "a.py", "offset": None, "limit": "30"}
+broken = {"path": "a.py", "limit": "30"}
 result = apply_tool_request_middleware("read_file", dict(broken), **ids)
 print("changed:", result.changed, "trace:", result.trace)
 assert result.payload == {"path": "a.py", "limit": 30}, result.payload
@@ -50,6 +51,15 @@ assert "repaired before execution" in parsed["_tool_harness"], parsed["_tool_har
 again = invoke_hook("transform_tool_result", tool_name="read_file", args={"path": "a.py"}, result="plain", **ids)
 assert not any(isinstance(r, str) for r in again), again
 print("note applied once; second result untouched")
+
+web_ids = {"session_id": "probe-session", "tool_call_id": "web-1"}
+web = apply_tool_request_middleware("web_extract", {"urls": '["https://a.test", "https://b.test"]'}, **web_ids)
+assert web.changed and web.payload == {"urls": ["https://a.test", "https://b.test"]}, web
+web_result = invoke_hook("transform_tool_result", tool_name="web_extract", args=web.payload,
+                         result='{"results": []}', **web_ids)
+assert any(isinstance(item, str) and "parse_json_array" in item for item in web_result), web_result
+invalid = apply_tool_request_middleware("read_file", {"path": "a.py", "limit": "3000"}, **web_ids)
+assert not invalid.changed, invalid
 
 # Public-preview scope: no path/content/command rewrites or unknown-tool repair.
 for tool, args in (

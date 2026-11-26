@@ -1,14 +1,17 @@
 name: tool-harness
 label: CommandPLUG
-version: 1.1.1
+version: 1.2.0
 description: "CommandPLUG: repair selected numeric tool arguments in Hermes and report local repair counts."
 author: xtalia
 license: MIT
 requires_hermes: ">=0.23.0"
+python_dependencies:
+  - "jsonschema>=4.18,<5"
 manifest_version: 2
 kind: standalone
 provides_hooks:
   - transform_tool_result
+  - post_tool_call
   - on_session_end
   - agent_loop_stopped
 provides_middleware:
