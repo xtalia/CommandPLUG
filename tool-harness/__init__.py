@@ -46,6 +46,21 @@ _CONTROLS = {
     "web_extract": frozenset({"urls", "char_limit"}),
 }
 
+# Field-NAME aliases: the same value the model already sent, under a name the tool
+# schema does not declare. Only the key is renamed; the value is never altered, and the
+# whole call is re-validated before the rename is applied. Open models trained on other
+# harnesses (Claude Code / Command Code spell it ``file_path``) can emit these, while
+# current Hermes rejects a call that is missing the canonical ``path`` field.
+# Kept tool-scoped and canonical-key-absent-only so a rename can never shadow a real field.
+# Read-only on purpose: an alias is a pure key rename with no I/O, so it cannot bypass the
+# path denylist, sandbox backend, read/write ledger, or approvals the real tool still runs.
+_FIELD_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "read_file": {
+        "path": ("file_path", "filePath", "filepath", "absolute_path", "absolutePath",
+                 "target_file", "filename", "file_name", "file"),
+    },
+}
+
 
 def _has_external_reference(value: Any) -> bool:
     if isinstance(value, dict):
@@ -135,6 +150,45 @@ def _issues(errors: list) -> tuple[Issue, ...]:
     return tuple(result)
 
 
+def _apply_field_aliases(tool_name: str, working: dict, schema: dict) -> list[str]:
+    """Rename one recognized synonym of a required, omitted property. Key-only, no I/O.
+
+    Applies only when the canonical key is absent from the call, it is declared *and*
+    ``required`` by the schema, exactly one recognized synonym is present at all, that
+    synonym is not itself a declared property, and its value is a non-empty string.
+    Presence is counted before looking at the value: a second spelling carrying ``None``,
+    ``123``, ``""`` or whitespace still makes the call ambiguous and blocks the rename.
+    Anything else is left untouched: a rename that guesses which of several spellings was
+    meant is worse than no rename. The
+    caller re-validates the whole call before using the result, so a rename can never turn a
+    broken call into a schema-valid one. Only the key moves; the value bytes never change.
+    """
+    aliases = _FIELD_ALIASES.get(tool_name)
+    if not aliases:
+        return []
+    properties = schema.get("properties")
+    required = schema.get("required")
+    if not isinstance(properties, dict) or not isinstance(required, list):
+        return []
+    notes: list[str] = []
+    for canonical, synonyms in aliases.items():
+        if canonical in working or canonical not in required or canonical not in properties:
+            continue
+        # Count every recognized spelling that is present, before inspecting any value.
+        # A second spelling is ambiguous even when it carries None, 123, "", or is itself
+        # a declared property: we may not know which one the caller meant, so never guess.
+        present = [name for name in synonyms if name in working]
+        if len(present) != 1:
+            continue  # absent, or ambiguous across several spellings: never guess
+        source = present[0]
+        value = working[source]
+        if source in properties or not isinstance(value, str) or not value.strip():
+            continue  # the only spelling present is unusable on its own: leave it alone
+        working[canonical] = working.pop(source)
+        notes.append(f"alias_{canonical}: renamed `{source}` to `{canonical}` for `{tool_name}`")
+    return notes
+
+
 def _evaluate(tool_name: str, args: Any) -> Outcome:
     """Produce a typed proposal, never execute a tool or mutate the caller's arguments."""
     original = None
@@ -163,23 +217,34 @@ def _evaluate(tool_name: str, args: Any) -> Outcome:
         if not errors:
             return Outcome(OutcomeKind.VALID, original)
         issues = _issues(errors)
-        invalid = {error.path[0] for error in errors
+        working = deepcopy(original)
+        changes: list[str] = []
+
+        # 1) Field-NAME alias: a pure key rename onto a required property the model omitted
+        #    while sending a recognized synonym. Read-only and value-preserving.
+        changes.extend(_apply_field_aliases(tool_name, working, schema))
+
+        # 2) Narrow value coercions on the controls, gated on the schema's own type errors.
+        working_errors = list(validator.iter_errors(working))
+        invalid = {error.path[0] for error in working_errors
                    if error.validator == "type" and len(error.path) == 1 and error.path[0] in controls}
-        if not invalid:
+        if invalid:
+            selected = {k: deepcopy(v) for k, v in working.items() if k in invalid}
+            normalized, notes = repair_tool_args(tool_name, selected, parameters=schema)
+            allowed_rules = ("coerce_number:", "parse_json_array:")
+            if (notes and all(note.startswith(allowed_rules) for note in notes)
+                    and not (tool_name == "terminal" and set(normalized) != invalid)):
+                for key in invalid:
+                    working.pop(key, None)
+                working.update(normalized)
+                changes.extend(notes)
+
+        if not changes:
             return Outcome(OutcomeKind.UNREPAIRABLE, original, issues=issues, reason="no_safe_rule")
-        selected = {k: deepcopy(v) for k, v in original.items() if k in invalid}
-        normalized, notes = repair_tool_args(tool_name, selected, parameters=schema)
-        allowed_rules = ("coerce_number:", "parse_json_array:")
-        if not notes or not all(note.startswith(allowed_rules) for note in notes):
-            return Outcome(OutcomeKind.UNREPAIRABLE, original, issues=issues, reason="no_safe_rule")
-        if tool_name == "terminal" and set(normalized) != invalid:
-            return Outcome(OutcomeKind.UNREPAIRABLE, original, issues=issues, reason="no_safe_rule")
-        repaired = {k: deepcopy(v) for k, v in original.items() if k not in invalid}
-        repaired.update(normalized)
-        candidate_errors = list(validator.iter_errors(repaired))
+        candidate_errors = list(validator.iter_errors(working))
         if candidate_errors:
             return Outcome(OutcomeKind.UNREPAIRABLE, original, issues=issues + _issues(candidate_errors), reason="candidate_invalid")
-        return Outcome(OutcomeKind.REPAIRED, original, candidate=repaired, issues=issues, changes=tuple(notes))
+        return Outcome(OutcomeKind.REPAIRED, original, candidate=working, issues=issues, changes=tuple(changes))
     except Exception:
         # Validation exceptions can contain argument values; do not log their text.
         logger.debug("tool-harness evaluation failed")

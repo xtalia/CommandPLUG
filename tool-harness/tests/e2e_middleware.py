@@ -99,6 +99,18 @@ with patch.object(registry, "dispatch", return_value='{"content":"fixture"}') as
     assert dispatch.call_args.args[1]["urls"] == ["[broken"]
 print("direct and agent dispatch guard probes passed; handler mocked")
 
+# Exercise alias repair through the real dispatcher and a real isolated file read.
+from pathlib import Path
+with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as temp_dir:
+    fixture = Path(temp_dir) / "alias-read.txt"
+    fixture.write_text("alias probe\n", encoding="utf-8")
+    original = {"file_path": str(fixture), "limit": "2"}
+    result = json.loads(handle_function_call("read_file", original, session_id="fixture", tool_call_id="real-alias"))
+    assert "alias probe" in result.get("content", ""), result
+    assert "alias_path" in result.get("_tool_harness", ""), result
+    assert original == {"file_path": str(fixture), "limit": "2"}, original
+print("real dispatcher alias read passed")
+
 # Public-preview scope: no path/content/command rewrites or unknown-tool repair.
 for tool, args in (
     ("read_file", {"path": "[notes.md](http://notes.md)"}),

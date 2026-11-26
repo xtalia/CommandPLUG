@@ -6,7 +6,7 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin inspired b
 
 ## What it does
 
-- Validates calls against the registered tool schema, repairs allowlisted invalid fields, and validates again before applying a repair. It handles numeric controls in `read_file`, `search_files`, `terminal`, and `web_extract`, as well as JSON-stringified arrays in `web_extract.urls`. It can tell the model what changed. It does not rewrite commands, paths, or file contents. The execution middleware rejects invalid calls it observes and returns a retry error; checks that cannot run fail open.
+- Validates calls against the registered tool schema, repairs allowlisted invalid fields, and validates again before applying a repair. It handles numeric controls in `read_file`, `search_files`, `terminal`, and `web_extract`, JSON-stringified arrays in `web_extract.urls`, and the most common read-path synonyms (`file_path`, `filePath`, `absolutePath`, `target_file`, …) for `read_file.path`. It can tell the model what changed. It does not rewrite commands, paths, or file contents. The execution middleware rejects invalid calls it observes and returns a retry error; checks that cannot run fail open.
 - Runs in the Hermes backend, not just Desktop. Use `/commandplug` for status and local repair counts. Desktop has an optional status-bar badge.
 
 ## How tool-call repair works
@@ -22,10 +22,12 @@ Each request check has an explicit outcome: **Valid** (already valid), **Repaire
 
 | Tool | Fields eligible for repair |
 | --- | --- |
-| `read_file` | `offset`, `limit`: numeric strings to integers |
+| `read_file` | `offset`, `limit`: numeric strings to integers; `path`: recognized read-path synonyms (`file_path`, `filePath`, `filepath`, `absolute_path`, `absolutePath`, `target_file`, `filename`, `file_name`, `file`) renamed to `path` |
 | `search_files` | `offset`, `limit`, `context`: numeric strings to integers |
 | `terminal` | `timeout`: numeric strings to integers; the command is never rewritten |
 | `web_extract` | `char_limit`: numeric strings to integers; `urls`: a JSON-stringified array to an array |
+
+A path alias is a **key rename only**: it fires solely when `path` is missing, exactly one recognized synonym is present at all, that synonym is not itself a schema property, its value is a non-empty string, and the whole call re-validates afterwards. Presence is counted before values are inspected, so a second spelling — even one holding `null`, a number, or whitespace — makes the call ambiguous and blocks the rename. An empty value, a canonical `path` already present, and several synonyms at once are all left untouched — the plugin never guesses which path was meant. Because the rename is pure (no I/O, no value change), the real `read_file` still runs its device-path blocklist, sandbox backend, read ledger, and secret redaction exactly as before.
 
 The plugin does **not** guess paths, turn a bare string into a URL list, or remove `null` / `{}` to substitute defaults. Other tools and nested fields are outside its repair scope. The repair catalogue also contains experimental rules that are **not enabled** in the runtime.
 
@@ -35,7 +37,7 @@ This is a best-effort repair and execution-check layer, **not a universal final-
 
 - **[Taste](https://commandcode.ai/docs/taste):** keep reusable coding preferences so you don’t have to repeat the same corrections.
 - **[Design](https://commandcode.ai/docs/design):** bring design, review, and refinement into the coding workflow so UI work gets fewer rounds of rework.
-- **[Read](https://commandcode.ai/docs/harness-engineering/read-tool) and [shell](https://commandcode.ai/docs/harness-engineering/shell-tool):** try targeted file reads and better handling of noisy command output. Measure retries, elapsed time, and tokens on the same tasks. Start with open-weight models; test whether GPT and Claude benefit too.
+- **[Read](https://commandcode.ai/docs/harness-engineering/read-tool) and [shell](https://commandcode.ai/docs/harness-engineering/shell-tool):** this release adds read-path alias repair (`filePath`/`file_path` → `path`), which current Hermes otherwise rejects as "missing required argument(s): path". The capability inventory, current-source checks and remaining candidates are in [`docs/read-shell-comparison.md`](docs/read-shell-comparison.md). Multi-file batch reads are **not** implemented: dispatching underlying tools from a plugin does not establish equivalent per-call guards and session gating. The scripted [`tool-harness/tests/bench_alias_repair.py`](tool-harness/tests/bench_alias_repair.py) compares local tool-call counts and wall-clock with a manually supplied correction; it does **not** measure model retries or provider tokens. Comparative open-weight, GPT and Claude runs remain future work.
 
 ## Install
 

@@ -1,5 +1,6 @@
 """Regression tests for validated repairs and reliable telemetry."""
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -253,6 +254,137 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'handler failed'):
             plugin._on_tool_execution(tool_name='read_file', args={'path': 'a'}, next_call=handler)
         self.assertEqual(len(called), 1)
+
+
+class FieldAliasTests(unittest.TestCase):
+    """Field-NAME aliases: a pure, re-validated key rename for a required property.
+
+    The value bytes never change and the whole call must be schema-valid after the rename,
+    so a repair can never invent a path or turn a broken call into a schema-valid one.
+    """
+
+    def setUp(self):
+        plugin._counters.clear()
+        plugin._pending.clear()
+        plugin._repairs_since_flush = 0
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / 'metrics.jsonl'
+
+    def test_single_synonym_renames_preserving_the_value_exactly(self):
+        for sent in ('file_path', 'filePath', 'filepath', 'absolute_path', 'absolutePath',
+                     'target_file', 'filename', 'file_name', 'file'):
+            with self.subTest(sent=sent):
+                original = {sent: ' a b/c.ts ', 'limit': '20'}
+                result = plugin._on_tool_request(tool_name='read_file', args=dict(original),
+                                                 session_id='alias', tool_call_id=sent)
+                self.assertEqual(result['args'], {'path': ' a b/c.ts ', 'limit': 20})
+                self.assertIn('alias_path', result['reason'])
+                self.assertNotIn(sent, result['args'])
+                # The caller's dict is never mutated in place.
+                self.assertEqual(original, {sent: ' a b/c.ts ', 'limit': '20'})
+
+    def test_canonical_call_is_never_touched(self):
+        ids = {'session_id': 's', 'tool_call_id': 'c'}
+        self.assertIsNone(plugin._on_tool_request(tool_name='read_file', args={'path': 'a.ts'}, **ids))
+        # Canonical + a synonym present: the canonical field wins; no rename, no drop.
+        self.assertIsNone(plugin._on_tool_request(
+            tool_name='read_file', args={'path': 'real.ts', 'file_path': 'other.ts'}, session_id='s', tool_call_id='c2'))
+
+    def test_alias_never_guesses_between_several_synonyms(self):
+        for args in ({'file_path': 'a.ts', 'filePath': 'b.ts'}, {'file_path': 'a.ts', 'file': 'b.ts'}):
+            with self.subTest(args=args):
+                self.assertIsNone(plugin._on_tool_request(
+                    tool_name='read_file', args=dict(args), session_id='s', tool_call_id='amb'))
+
+    def test_empty_or_non_string_synonym_is_left_alone(self):
+        for args in ({'file_path': '   '}, {'file_path': ''}, {'file_path': None}, {'file_path': 123}):
+            with self.subTest(args=args):
+                self.assertIsNone(plugin._on_tool_request(
+                    tool_name='read_file', args=dict(args), session_id='s', tool_call_id='empty'))
+
+    def test_second_unusable_synonym_still_blocks_the_rename(self):
+        # Presence is counted before values are inspected. A well-formed synonym plus a
+        # second spelling holding None, whitespace, or a non-string is ambiguous: no rename,
+        # and the caller's dict is untouched.
+        for args in ({'file_path': 'a', 'filePath': None},
+                     {'file_path': 'a', 'file': ' '},
+                     {'file_path': 'a', 'filePath': 123}):
+            with self.subTest(args=args):
+                original = dict(args)
+                self.assertIsNone(plugin._on_tool_request(
+                    tool_name='read_file', args=args, session_id='s', tool_call_id='amb-empty'))
+                self.assertEqual(args, original)
+
+    def test_declared_property_counts_as_ambiguity(self):
+        # A second recognized spelling that the schema declares is still a second spelling.
+        from tools.registry import registry
+        schema = {'type': 'object',
+                  'properties': {'path': {'type': 'string'}, 'file': {'type': 'string'}},
+                  'required': ['path']}
+        with patch.object(registry, 'definition_for', return_value={'function': {'parameters': schema}}):
+            self.assertIsNone(plugin._on_tool_request(
+                tool_name='read_file', args={'file_path': 'a', 'file': 'b'}, session_id='s', tool_call_id='decl'))
+
+    def test_unknown_leftover_field_is_still_rejected_by_execution_guard(self):
+        # Rename succeeds but an unrelated undeclared field keeps the call invalid: the guard
+        # blocks (never runs the handler) and never leaks the argument value into the error.
+        called = []
+        result = plugin._on_tool_execution(
+            tool_name='read_file', args={'file_path': 'secret-path.ts', 'bogus': 1},
+            next_call=lambda a: called.append(a))
+        self.assertEqual(called, [])
+        self.assertEqual(json.loads(result)['error_type'], 'tool_validation')
+        self.assertNotIn('secret-path.ts', result)
+
+    def test_alias_does_not_fire_without_a_required_property(self):
+        from tools.registry import registry
+        schema = {'type': 'object', 'properties': {'path': {'type': 'string'}}}  # path not declared required
+        with patch.object(registry, 'definition_for', return_value={'function': {'parameters': schema}}):
+            self.assertIsNone(plugin._on_tool_request(
+                tool_name='read_file', args={'file_path': 'a.ts'}, session_id='s', tool_call_id='opt'))
+
+    def test_alias_does_not_fire_for_an_undeclared_name(self):
+        # A synonym that IS a declared property must not be treated as an alias.
+        from tools.registry import registry
+        schema = {'type': 'object', 'properties': {'path': {'type': 'string'}, 'file': {'type': 'string'}},
+                  'required': ['path']}
+        with patch.object(registry, 'definition_for', return_value={'function': {'parameters': schema}}):
+            self.assertIsNone(plugin._on_tool_request(
+                tool_name='read_file', args={'file': 'a.ts'}, session_id='s', tool_call_id='declared'))
+
+    def test_unavailable_validator_skips_alias_repair(self):
+        with patch.object(plugin, '_validation_library', return_value=None):
+            self.assertIsNone(plugin._on_tool_request(
+                tool_name='read_file', args={'file_path': 'a.ts'}, session_id='s', tool_call_id='u'))
+
+    def test_alias_renames_cannot_cross_sessions(self):
+        a = {'session_id': 'a|b', 'tool_call_id': 'c', 'tool_name': 'read_file'}
+        b = {'session_id': 'a', 'tool_call_id': 'b|c', 'tool_name': 'read_file'}
+        self.assertIsNotNone(plugin._on_tool_request(args={'file_path': 'a.ts'}, **a))
+        self.assertIsNone(plugin._on_transform_result(result='{}', **b))
+        note = plugin._on_transform_result(result='plain text', **a)
+        self.assertIn('alias_path', note)
+
+    def test_alias_concurrent_calls_keep_their_own_notes(self):
+        ids = [(f'sess-{i}', f'call-{i}') for i in range(20)]
+        for sid, cid in ids:
+            plugin._on_tool_request(tool_name='read_file', args={'file_path': f'{cid}.ts'},
+                                    session_id=sid, tool_call_id=cid)
+        # Pop out of order; each result carries only its own call's note, exactly once.
+        for sid, cid in reversed(ids):
+            note = plugin._on_transform_result(result='{}', tool_name='read_file', session_id=sid, tool_call_id=cid)
+            self.assertIn('alias_path', note)
+            self.assertNotIn(cid + '.ts', note)
+            self.assertIsNone(plugin._on_transform_result(
+                result='{}', tool_name='read_file', session_id=sid, tool_call_id=cid))
+
+    def test_notes_never_record_argument_values(self):
+        with patch.object(plugin, '_log_path', return_value=self.path):
+            plugin._on_tool_request(tool_name='read_file', args={'file_path': 'private-name.ts'},
+                                    session_id='s', tool_call_id='c')
+            plugin._summary()
+            self.assertNotIn('private-name', self.path.read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':
