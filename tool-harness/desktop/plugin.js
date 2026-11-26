@@ -31,22 +31,19 @@ async function readCli(profile) {
 const CHIP = {
   display: "inline-flex",
   alignItems: "center",
-  gap: "6px",
-  padding: "1px 8px",
-  borderRadius: "999px",
-  border: "1px solid",
+  gap: "5px",
+  padding: "0 4px",
   font: "inherit",
-  fontSize: "0.8em",
-  lineHeight: "1.6",
+  color: "var(--ui-text-secondary)",
   whiteSpace: "nowrap",
   cursor: "default",
 };
 
 const PHASES = {
-  active: { label: "active", fg: "#0f5132", bg: "#d1e7dd", border: "#a3cfbb", dot: "#198754" },
-  inactive: { label: "unconfirmed", fg: "#664d03", bg: "#fff3cd", border: "#ffe69c", dot: "#b58100" },
-  pending: { label: "checking", fg: "#664d03", bg: "#fff3cd", border: "#ffe69c", dot: "#ffc107" },
-  offline: { label: "offline", fg: "#41464b", bg: "#e2e3e5", border: "#c4c8cb", dot: "#6c757d" },
+  active: { label: "active", dot: "var(--ui-green)" },
+  inactive: { label: "unconfirmed", dot: "var(--ui-yellow)" },
+  pending: { label: "checking", dot: "var(--ui-yellow)" },
+  offline: { label: "offline", dot: "var(--ui-text-quaternary)" },
 };
 
 function StatusChip() {
@@ -124,12 +121,7 @@ function StatusProbe({ open, profile }) {
     title: accessibleLabel,
     "data-area": "statusBar.right",
     "data-plugin": "tool-harness",
-    style: {
-      ...CHIP,
-      color: tone.fg,
-      backgroundColor: tone.bg,
-      borderColor: tone.border,
-    },
+    style: CHIP,
     children: [
       jsx("span", {
         key: "dot",
